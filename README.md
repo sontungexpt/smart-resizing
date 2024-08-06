@@ -1,5 +1,7 @@
 The built-in function help you improve the resizing behavior of neovim.
 
+This is just a sudden thought, so there may be many functions that are not reasonable. Please give me your feedback.
+
 ## Installation
 
 ```lua
