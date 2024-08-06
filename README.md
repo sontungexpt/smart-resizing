@@ -31,6 +31,12 @@ This is just a sudden thought, so there may be many functions that are not reaso
 
 ✨ **Elevate your productivity with effortless window management!** Experience a more organized and efficient workspace with just a few keystrokes. 🚀
 
+## What's Bad?
+
+When there are more than 3 windows in a direction, the resizing behavior can feel uncomfortable. (It's not very bad, but for me, it sometimes feels uncomfortable, and I still haven't found a better behavior to solve this).
+
+But I think it's find than the default behavior of neovim since there never seems to be more than 3 windows in a direction.
+
 ## Preiview
 
 https://github.com/user-attachments/assets/0c87fc05-2415-4470-823e-f88b15e68465
