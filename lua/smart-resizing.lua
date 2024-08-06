@@ -150,7 +150,7 @@ M.increase_current_win_size = function(step, dimension)
 
 		if props.primary_direction then
 			set_size_fn(0, win_size + props.primary_direction)
-		elseif props.middle_position < middle_vim_position(dimension) - win_size / 3 then -- move the threshold to left than the middle_vim_position
+		elseif props.middle_position < middle_vim_position(dimension) then
 			set_size_fn(0, win_size + step)
 		else
 			local hork = props.width_dimension and "h" or "k"
@@ -210,7 +210,7 @@ M.decrease_current_win_size = function(step, dimension)
 
 		if props.primary_direction then
 			set_size_fn(0, win_size - props.primary_direction)
-		elseif win_size > winmin and props.middle_position > middle_vim_position(dimension) - win_size / 3 then -- move the threshold to left than the middle_vim_position
+		elseif win_size > winmin and props.middle_position > middle_vim_position(dimension) then
 			set_size_fn(0, win_size - step)
 		else
 			local lorj = props.width_dimension and "l" or "j"
