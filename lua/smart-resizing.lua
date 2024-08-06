@@ -1,3 +1,4 @@
+local vim = vim
 local uv = vim.uv or vim.loop
 local fn = vim.fn
 local api = vim.api
