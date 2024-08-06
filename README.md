@@ -20,7 +20,9 @@ This is just a sudden thought, so there may be many functions that are not reaso
 
 - **Calculate the area with a lot of empty space compared to the total window and resize based on that.**
 
-  - Compared with the middle position of vim and choose the side with the most empty space to minimize or maximize the window.
+  - Compared with the middle position of vim and choose the side with the most empty space to maximize and least empty space to minimize.
+
+  - If the height cannot be resized further, the window will glide to the bottommost or rightmost position.
 
 ### 🚀 **Speed Up When Holding:**
 

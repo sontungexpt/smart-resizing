@@ -105,27 +105,27 @@ end
 local get_window_properties = function(step, dimension)
 	local width_dimension = dimension == Dimension.WIDTH
 	local winnr = fn_winnr()
-	local set_fn, get_fn, winmin, primary_direction = nil, nil, nil, nil
+	local set_size_fn, get_size_fn, winmin, primary_direction = nil, nil, nil, nil
 
 	if width_dimension then
 		primary_direction = winnr == fn_winnr("l") and -step or winnr == fn_winnr("h") and step or nil
-		set_fn = api.nvim_win_set_width
-		get_fn = api.nvim_win_get_width
+		set_size_fn = api.nvim_win_set_width
+		get_size_fn = api.nvim_win_get_width
 		winmin = o.winminwidth
 	else
 		primary_direction = winnr == fn_winnr("j") and -step or winnr == fn_winnr("k") and step or nil
-		set_fn = api.nvim_win_set_height
-		get_fn = api.nvim_win_get_height
+		set_size_fn = api.nvim_win_set_height
+		get_size_fn = api.nvim_win_get_height
 		winmin = o.winminheight
 	end
 
-	local win_size = get_fn(0)
+	local win_size = get_size_fn(0)
 
 	return {
 		width_dimension = width_dimension,
 		primary_direction = primary_direction, -- The primary direction of the window resizing in increasing if decreasing then change this prop to negative
-		set_fn = set_fn,
-		get_fn = get_fn,
+		set_size_fn = set_size_fn,
+		get_size_fn = get_size_fn,
 		winmin = winmin,
 		win_size = win_size,
 		middle_position = api.nvim_win_get_position(0)[dimension] + win_size / 2,
@@ -138,20 +138,20 @@ end
 M.increase_current_win_size = function(step, dimension)
 	vim.schedule(function()
 		local props = get_window_properties(step, dimension)
-		local set_fn = props.set_fn
+		local set_size_fn = props.set_size_fn
 		local win_size = props.win_size
 
 		if is_float() then
-			set_fn(0, win_size + step)
+			set_size_fn(0, win_size + step)
 			return
 		end
 
-		local get_fn = props.get_fn
+		local get_size_fn = props.get_size_fn
 
 		if props.primary_direction then
-			set_fn(0, win_size + props.primary_direction)
+			set_size_fn(0, win_size + props.primary_direction)
 		elseif props.middle_position < middle_vim_position(dimension) - win_size / 3 then -- move the threshold to left than the middle_vim_position
-			set_fn(0, win_size + step)
+			set_size_fn(0, win_size + step)
 		else
 			local hork = props.width_dimension and "h" or "k"
 			local idx = 1
@@ -160,18 +160,18 @@ M.increase_current_win_size = function(step, dimension)
 			local winmin = props.winmin
 
 			local dimensions = {
-				{ id = target_id, size = get_fn(target_id) },
+				{ id = target_id, size = get_size_fn(target_id) },
 			}
 
 			while dimensions[idx].size - step <= winmin do
 				if last_id == target_id then
-					set_fn(0, win_size + step)
+					set_size_fn(0, win_size + step)
 					break
 				else
 					last_id = target_id
 					idx = idx + 1
 					target_id = winid(hork)
-					dimensions[idx] = { id = target_id, size = get_fn(target_id) }
+					dimensions[idx] = { id = target_id, size = get_size_fn(target_id) }
 				end
 			end
 
@@ -182,7 +182,7 @@ M.increase_current_win_size = function(step, dimension)
 					adjust_size = dimensions[i].size - winmin
 					new_size = winmin
 				end
-				set_fn(dimensions[i].id, new_size)
+				set_size_fn(dimensions[i].id, new_size)
 				if i > 1 then
 					dimensions[i - 1].size = dimensions[i - 1].size + adjust_size
 				end
@@ -198,23 +198,38 @@ M.decrease_current_win_size = function(step, dimension)
 	vim.schedule(function()
 		local props = get_window_properties(step, dimension)
 		local win_size = props.win_size
-		local set_fn = props.set_fn
+		local set_size_fn = props.set_size_fn
 
 		if is_float() then
-			set_fn(0, win_size - step)
+			set_size_fn(0, win_size - step)
 			return
 		end
 
-		local get_fn = props.get_fn
+		local get_size_fn = props.get_size_fn
 		local winmin = props.winmin
 
 		if props.primary_direction then
-			set_fn(0, win_size - props.primary_direction)
+			set_size_fn(0, win_size - props.primary_direction)
 		elseif win_size > winmin and props.middle_position > middle_vim_position(dimension) - win_size / 3 then -- move the threshold to left than the middle_vim_position
-			set_fn(0, win_size - step)
-		elseif fn.winwidth(fn.winnr(props.width_dimension and "l" or "j")) > winmin or win_size > winmin then
-			local target_id = winid(props.width_dimension and "h" or "k")
-			set_fn(target_id, get_fn(target_id) + step)
+			set_size_fn(0, win_size - step)
+		else
+			local lorj = props.width_dimension and "l" or "j"
+
+			local idx = 1
+			local last_id = -1
+			local target_id = winid(lorj)
+
+			while last_id ~= target_id do
+				if get_size_fn(target_id) > winmin then
+					local win_push_id = winid(props.width_dimension and "h" or "k")
+					set_size_fn(win_push_id, get_size_fn(win_push_id) + step)
+					return
+				end
+
+				last_id = target_id
+				idx = idx + 1
+				target_id = winid(idx .. lorj)
+			end
 		end
 	end)
 end
