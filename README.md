@@ -16,28 +16,11 @@ This is just a sudden thought, so there may be many functions that are not reaso
 
 ## Features
 
-🌟 **Enhance Your Window Management with Smart Resizing and Centering!**
+### 🖼️ **Smart Window Resizing:**
 
-## 🖼️ **Smart Window Resizing:**
+- **Calculate the area with a lot of empty space compared to the total window and resize based on that.**
 
-- **Left Side Window:**
-  - Press `Alt + L` to **expand** the width and give your content more room.
-- **Right Side Window:**
-  - Press `Alt + H` to **shrink** the width and make more space for other windows.
-- **Top Side Window:**
-  - Press `Alt + J` to **increase** the height and view more of your content.
-- **Bottom Side Window:**
-  - Press `Alt + K` to **decrease** the height and tidy up your workspace.
-- 🔄 **Seamlessly adapts to the opposite sides as well!**
-
-### 📍 **Center Your Focus:**
-
-- **When Managing Multiple Windows:**
-  - Use `Alt + H` or `Alt + L` to adjust the width of the current window, centering it perfectly on your screen.
-  - If resizing is no longer possible, the window will smoothly slide to the rightmost position.
-- **For Height Adjustments:**
-  - Use `Alt + J` or `Alt + K` to resize and center the height.
-  - If the height cannot be resized further, the window will glide to the bottommost position.
+  - Compared with the middle position of vim and choose the side with the most empty space to minimize or maximize the window.
 
 ### 🚀 **Speed Up When Holding:**
 
