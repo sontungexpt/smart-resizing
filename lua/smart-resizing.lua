@@ -140,7 +140,7 @@ M.increase_current_win_size = function(step, dimension)
 
 		if props.primary_direction then
 			set_fn(0, win_size + props.primary_direction)
-		elseif props.middle_position < middle_vim_position(dimension) - win_size / 5 / 2 then -- why - win_size / 5 / 2? because to make the resizing beautiful
+		elseif props.middle_position < middle_vim_position(dimension) - win_size / 3 then -- move the threshold to left than the middle_vim_position
 			set_fn(0, win_size + step)
 		else
 			local hork = props.width_dimension and "h" or "k"
@@ -192,13 +192,11 @@ M.decrease_current_win_size = function(step, dimension)
 		local win_size = props.win_size
 		local winmin = props.winmin
 
-		local lorj = props.width_dimension and "l" or "j"
-
 		if props.primary_direction then
 			set_fn(0, win_size - props.primary_direction)
-		elseif win_size > winmin and props.middle_position > middle_vim_position(dimension) + win_size / 5 / 2 then -- why + win_size / 5 / 2? because to make the resizing beautiful
+		elseif win_size > winmin and props.middle_position > middle_vim_position(dimension) - win_size / 3 then -- move the threshold to left than the middle_vim_position
 			set_fn(0, win_size - step)
-		elseif fn.winwidth(fn.winnr(lorj)) > winmin or win_size > winmin then
+		elseif fn.winwidth(fn.winnr(props.width_dimension and "l" or "j")) > winmin or win_size > winmin then
 			local target_id = winid(props.width_dimension and "h" or "k")
 			set_fn(target_id, get_fn(target_id) + step)
 		end
