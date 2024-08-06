@@ -35,7 +35,7 @@ M.Action = Action
 --- @param speedup_threshold? uinteger The threshold of the speedup
 --- @param adjustment_factor? uinteger The adjustment factor of the speedup
 --- @return fun(step: number, action: ActionEnum) The adjust size callback
-local function create_speedup_callback(cb, speedup_threshold, adjustment_factor)
+local function create_hold_pressed_callback(cb, speedup_threshold, adjustment_factor)
 	---@diagnostic disable: undefined-field
 	local timer = uv.new_timer()
 	local last_call_time = -1
@@ -47,22 +47,25 @@ local function create_speedup_callback(cb, speedup_threshold, adjustment_factor)
 	--- @param step number The step of increasing
 	--- @param action ActionEnum The action of the window resizing
 	return function(step, action)
-		if is_speedup then
-			cb(math.ceil((uv.now() - last_call_time) / 1000 + adjustment_factor), action)
-
-			-- stop speedup after timeoutlen of inactivity
-			timer:stop()
-
-			timer:start(o.timeoutlen, 0, function()
+		timer:stop()
+		timer:start(
+			180, -- Stop holding and speedup after 250
+			0,
+			vim.schedule_wrap(function()
 				timer:stop()
 				is_speedup = false
 				last_call_time = -1
 			end)
+		)
+
+		if is_speedup then
+			cb(math.ceil((uv.now() - last_call_time) / 1000 + adjustment_factor), action)
 		else
 			if last_call_time < 0 then
 				last_call_time = uv.now()
 			end
 			cb(step, action)
+
 			if uv.now() - last_call_time > speedup_threshold then
 				is_speedup = true
 			end
@@ -94,7 +97,7 @@ end
 ---Get the window properties
 ---@param dimension DimensionEnum The dimension of the window
 ---@param step uinteger The step of increasing
-local function get_window_properties(dimension, step)
+local function get_window_properties(step, dimension)
 	local width_dimension = dimension == Dimension.WIDTH
 	local winnr = fn_winnr()
 	local set_fn, get_fn, winmin, primary_direction = nil, nil, nil, nil
@@ -129,7 +132,7 @@ end
 ---@param dimension DimensionEnum The dimension of the window
 M.increase_current_win_size = function(step, dimension)
 	vim.schedule(function()
-		local props = get_window_properties(dimension, step)
+		local props = get_window_properties(step, dimension)
 		local get_fn = props.get_fn
 		local set_fn = props.set_fn
 		local win_size = props.win_size
@@ -181,54 +184,56 @@ end
 --- @param step uinteger The step of decreasing
 --- @param dimension DimensionEnum The dimension of the window
 M.decrease_current_win_size = function(step, dimension)
-	local props = get_window_properties(dimension, step)
-	local get_fn = props.get_fn
-	local set_fn = props.set_fn
-	local win_size = props.win_size
-	local winmin = props.winmin
+	vim.schedule(function()
+		local props = get_window_properties(step, dimension)
+		local get_fn = props.get_fn
+		local set_fn = props.set_fn
+		local win_size = props.win_size
+		local winmin = props.winmin
 
-	local lorj = props.width_dimension and "l" or "j"
+		local lorj = props.width_dimension and "l" or "j"
 
-	if props.primary_direction then
-		set_fn(0, win_size - props.primary_direction)
-	elseif win_size > winmin and props.middle_position > middle_vim_position(dimension) then
-		set_fn(0, win_size - step)
-	elseif fn.winwidth(fn.winnr(lorj)) > winmin or win_size > winmin then
-		local hork = props.width_dimension and "h" or "k"
-		local target_id = winid(hork)
-		set_fn(target_id, get_fn(target_id) + step)
-	end
+		if props.primary_direction then
+			set_fn(0, win_size - props.primary_direction)
+		elseif win_size > winmin and props.middle_position > middle_vim_position(dimension) then
+			set_fn(0, win_size - step)
+		elseif fn.winwidth(fn.winnr(lorj)) > winmin or win_size > winmin then
+			local hork = props.width_dimension and "h" or "k"
+			local target_id = winid(hork)
+			set_fn(target_id, get_fn(target_id) + step)
+		end
+	end)
 end
 
 M.increase_current_win_width = function(step)
-	M.increase_current_win_size(Dimension.WIDTH, step)
+	M.increase_current_win_size(step, Dimension.WIDTH)
 end
 
 M.decrease_current_win_width = function(step)
-	M.decrease_current_win_size(Dimension.WIDTH, step)
+	M.decrease_current_win_size(step, Dimension.WIDTH)
 end
 
 M.increase_current_win_height = function(step)
-	M.increase_current_win_size(Dimension.HEIGHT, step)
+	M.increase_current_win_size(step, Dimension.HEIGHT)
 end
 
 M.decrease_current_win_height = function(step)
-	M.decrease_current_win_size(Dimension.HEIGHT, step)
+	M.decrease_current_win_size(step, Dimension.HEIGHT)
 end
 
-M.adjust_current_win_width = create_speedup_callback(function(step, action)
+M.adjust_current_win_width = create_hold_pressed_callback(function(step, action)
 	if action == Action.INCREASE then
-		M.increase_current_win_size(Dimension.WIDTH, step)
+		M.increase_current_win_size(step, Dimension.WIDTH)
 	else
-		M.decrease_current_win_size(Dimension.WIDTH, step)
+		M.decrease_current_win_size(step, Dimension.WIDTH)
 	end
 end)
 
-M.adjust_current_win_height = create_speedup_callback(function(step, action)
+M.adjust_current_win_height = create_hold_pressed_callback(function(step, action)
 	if action == Action.DECREASE then
-		M.increase_current_win_size(Dimension.HEIGHT, step)
+		M.increase_current_win_size(step, Dimension.HEIGHT)
 	else
-		M.decrease_current_win_size(Dimension.HEIGHT, step)
+		M.decrease_current_win_size(step, Dimension.HEIGHT)
 	end
 end)
 
