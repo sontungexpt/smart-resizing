@@ -70,10 +70,10 @@ like this:
     -- recommended to use this function since it has a speed up behavior when you hold the keybinding
     -- You should map the keybinding with the modifier key + h/j/k/l
 
-    map("n", "<A-h>", function() require("smart-resizing").adjust_current_win_width(1, 1) end)
-    map("n", "<A-l>", function() require("smart-resizing").adjust_current_win_width(1, 2) end)
-    map("n", "<A-j>", function() require("smart-resizing").adjust_current_win_height(1, 1) end)
-    map("n", "<A-k>", function() require("smart-resizing").adjust_current_win_height(1, 2) end)
+    vim.keymap.set("n", "<A-h>", function() require("smart-resizing").adjust_current_win_width(1, 1) end)
+    vim.keymap.set("n", "<A-l>", function() require("smart-resizing").adjust_current_win_width(1, 2) end)
+    vim.keymap.set("n", "<A-j>", function() require("smart-resizing").adjust_current_win_height(1, 1) end)
+    vim.keymap.set("n", "<A-k>", function() require("smart-resizing").adjust_current_win_height(1, 2) end)
 ```
 
 ## Built-in function
