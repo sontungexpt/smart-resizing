@@ -36,7 +36,7 @@ M.Action = Action
 --- @param speedup_threshold? uinteger The threshold of the speedup
 --- @param adjustment_factor? uinteger The adjustment factor of the speedup
 --- @return fun(step: number, action: ActionEnum) The adjust size callback
-local function create_hold_pressed_callback(cb, speedup_threshold, adjustment_factor)
+local create_hold_pressed_callback = function(cb, speedup_threshold, adjustment_factor)
 	---@diagnostic disable: undefined-field
 	local timer = uv.new_timer()
 	local last_call_time = -1
@@ -74,15 +74,19 @@ local function create_hold_pressed_callback(cb, speedup_threshold, adjustment_fa
 	end
 end
 
+local is_float = function()
+	return api.nvim_win_get_config(0).relative ~= ""
+end
+
 --- Get the window id of the direction or the current window
-local function winid(direction)
+local winid = function(direction)
 	return direction and fn.win_getid(fn_winnr(direction)) or api.nvim_get_current_win()
 end
 
 ---Get the middle position of the vim
 ---@param dimension DimensionEnum The dimension of the window
 ---@return number The middle position of the vim
-local function middle_vim_position(dimension)
+local middle_vim_position = function(dimension)
 	if dimension == Dimension.WIDTH then
 		return o.columns / 2
 	else
@@ -98,7 +102,7 @@ end
 ---Get the window properties
 ---@param dimension DimensionEnum The dimension of the window
 ---@param step uinteger The step of increasing
-local function get_window_properties(step, dimension)
+local get_window_properties = function(step, dimension)
 	local width_dimension = dimension == Dimension.WIDTH
 	local winnr = fn_winnr()
 	local set_fn, get_fn, winmin, primary_direction = nil, nil, nil, nil
@@ -134,9 +138,15 @@ end
 M.increase_current_win_size = function(step, dimension)
 	vim.schedule(function()
 		local props = get_window_properties(step, dimension)
-		local get_fn = props.get_fn
 		local set_fn = props.set_fn
 		local win_size = props.win_size
+
+		if is_float() then
+			set_fn(0, win_size + step)
+			return
+		end
+
+		local get_fn = props.get_fn
 
 		if props.primary_direction then
 			set_fn(0, win_size + props.primary_direction)
@@ -187,9 +197,15 @@ end
 M.decrease_current_win_size = function(step, dimension)
 	vim.schedule(function()
 		local props = get_window_properties(step, dimension)
-		local get_fn = props.get_fn
-		local set_fn = props.set_fn
 		local win_size = props.win_size
+		local set_fn = props.set_fn
+
+		if is_float() then
+			set_fn(0, win_size - step)
+			return
+		end
+
+		local get_fn = props.get_fn
 		local winmin = props.winmin
 
 		if props.primary_direction then
