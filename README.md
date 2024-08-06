@@ -14,7 +14,7 @@ The built-in function help you improve the resizing behavior of neovim.
 
 ## Features
 
-🚀 **Enhance Your Window Management with Smart Resizing and Centering!**
+🌟 **Enhance Your Window Management with Smart Resizing and Centering!**
 
 ## 🖼️ **Smart Window Resizing:**
 
@@ -36,6 +36,11 @@ The built-in function help you improve the resizing behavior of neovim.
 - **For Height Adjustments:**
   - Use `Alt + J` or `Alt + K` to resize and center the height.
   - If the height cannot be resized further, the window will glide to the bottommost position.
+
+### 🚀 **Speed Up When Holding:**
+
+- **Hold the Keybinding:**
+  - When you hold the keybinding, the window will resize faster, allowing you to quickly adjust the window size.
 
 ✨ **Elevate your productivity with effortless window management!** Experience a more organized and efficient workspace with just a few keystrokes. 🚀
 
@@ -101,3 +106,5 @@ You can access this enum by `require("smart-resizing").Dimension`
 - `decrease_current_win_height(step)`: decrease the height of the current window by 1
 
 ## License
+
+[MIT](./LICENSE)
