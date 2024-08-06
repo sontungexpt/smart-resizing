@@ -44,6 +44,23 @@ The built-in function help you improve the resizing behavior of neovim.
 
 ✨ **Elevate your productivity with effortless window management!** Experience a more organized and efficient workspace with just a few keystrokes. 🚀
 
+## Preiview
+
+
+
+https://github.com/user-attachments/assets/0c87fc05-2415-4470-823e-f88b15e68465
+
+
+
+https://github.com/user-attachments/assets/3a958a6b-59c6-433b-9585-0afe02ed49b6
+
+
+
+https://github.com/user-attachments/assets/a0d5861c-930f-4ee9-b558-feaa786bed81
+
+
+
+
 ## Usage
 
 Because this plugin is just contain a builtin function, you need to map it to a keybinding.
