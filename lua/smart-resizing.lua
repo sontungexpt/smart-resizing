@@ -210,7 +210,7 @@ M.decrease_current_win_size = function(step, dimension)
 
 		if props.primary_direction then
 			set_size_fn(0, win_size - props.primary_direction)
-		elseif win_size > winmin and props.middle_position > middle_vim_position(dimension) then
+		elseif win_size > winmin and props.middle_position >= middle_vim_position(dimension) then
 			set_size_fn(0, win_size - step)
 		else
 			local lorj = props.width_dimension and "l" or "j"
