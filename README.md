@@ -1,110 +1,212 @@
-The built-in function help you improve the resizing behavior of neovim.
+# smart-resizing.nvim
 
-This is just a sudden thought, so there may be many functions that are not reasonable. Please give me your feedback.
+A lightweight Neovim plugin that provides smarter window resizing with center-aware space distribution and optional hold-to-accelerate behavior.
 
-## Installation
-
-```lua
-
-    --lazy
-    {
-        lazy = true,
-        "sontungexpt/smart-resizing.nvim",
-    }
-
-```
+Instead of relying entirely on Neovim's default window resizing, `smart-resizing.nvim` considers the current window's position and its neighboring windows to make resizing feel more balanced and predictable.
 
 ## Features
 
-### 🖼️ **Smart Window Resizing:**
+### Smart Window Resizing
 
-- **Calculate the area with a lot of empty space compared to the total window and resize based on that.**
+- **Center-aware resizing:** Uses the center of the editor as a reference when deciding how to resize the current window.
+- **Edge-aware behavior:** Adjusts resizing direction when the current window is at an edge.
+- **Neighbor space distribution:** When necessary, borrows space from neighboring windows instead of blindly resizing the current window.
+- **Minimum size awareness:** Respects `winminwidth` and `winminheight` when distributing space between windows.
+- **Floating window support:** Supports resizing floating windows without applying the normal tiled-window balancing logic.
+- **Count support:** Supports Vim counts, such as `5` followed by your resize mapping.
 
-  - Compared with the middle position of vim and choose the side with the most empty space to maximize and least empty space to minimize.
+### Hold-to-Accelerate
 
-  - If the height cannot be resized further, the window will glide to the bottommost or rightmost position.
+Optionally increases the resizing step when a key is held down.
 
-### 🚀 **Speed Up When Holding:**
+- Repeated key presses within a configurable detection interval are treated as one continuous hold.
+- Acceleration starts after the hold threshold.
+- The resizing step increases progressively while the key continues to be repeated.
 
-- **Hold the Keybinding:**
-  - When you hold the keybinding, the window will resize faster, allowing you to quickly adjust the window size.
+This is disabled by default.
 
-✨ **Elevate your productivity with effortless window management!** Experience a more organized and efficient workspace with just a few keystrokes. 🚀
+## Installation
 
-## What's Bad?
+Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
-When there are more than 3 windows in a direction, the resizing behavior can feel uncomfortable. (It's not very bad, but for me, it sometimes feels uncomfortable, and I still haven't found a better behavior to solve this).
+```lua
+{
+    "sontungexpt/smart-resizing.nvim",
+    lazy = true,
+    opts = {
+        step = 1,
+        accelerate = true,
+    },
+}
+```
 
-But I think it's find than the default behavior of neovim since there never seems to be more than 3 windows in a direction.
+The plugin exposes functions that can be loaded directly from keymaps, so it does not need to load during startup.
 
-## Preiview
+## Configuration
 
-https://github.com/user-attachments/assets/0c87fc05-2415-4470-823e-f88b15e68465
+All options are optional.
 
-https://github.com/user-attachments/assets/3a958a6b-59c6-433b-9585-0afe02ed49b6
+```lua
+require("smart-resizing").setup({
+    -- Default number of cells per resize operation.
+    step = 1,
 
-https://github.com/user-attachments/assets/a0d5861c-930f-4ee9-b558-feaa786bed81
+    -- Enable hold-to-accelerate behavior.
+    accelerate = false,
+})
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `step` | integer | `1` | Default number of cells per resize operation. |
+| `accelerate` | boolean | `false` | Enable progressive acceleration when holding a resize key. |
+
+### Acceleration behavior
+
+The current implementation uses these internal constants:
+
+| Constant | Value | Description |
+|---|---:|---|
+| `HOLD_TIMEOUT_MS` | `180` ms | Maximum interval between repeated presses to consider a key held. |
+| `HOLD_THRESHOLD_MS` | `600` ms | Time before acceleration starts. |
+| `HOLD_FACTOR` | `2` | Base added to the accelerated step. |
+
+These are currently internal implementation details rather than public configuration options.
 
 ## Usage
 
-Because this plugin is just contain a builtin function, you need to map it to a keybinding.
-like this:
+The plugin only provides resizing functions. You can bind them to your preferred key combinations.
+
+### Recommended keymaps
 
 ```lua
-    -- recommended to use this function since it has a speed up behavior when you hold the keybinding
-    -- You should map the keybinding with the modifier key + h/j/k/l
+local resize = require("smart-resizing")
 
-    vim.keymap.set("n", "<A-h>", function() require("smart-resizing").adjust_current_win_width(1, 1) end)
-    vim.keymap.set("n", "<A-l>", function() require("smart-resizing").adjust_current_win_width(1, 2) end)
-    vim.keymap.set("n", "<A-j>", function() require("smart-resizing").adjust_current_win_height(1, 1) end)
-    vim.keymap.set("n", "<A-k>", function() require("smart-resizing").adjust_current_win_height(1, 2) end)
+-- Width
+vim.keymap.set("n", "<A-h>", function()
+    resize.decrease("width")
+end, { desc = "Decrease window width" })
+
+vim.keymap.set("n", "<A-l>", function()
+    resize.increase("width")
+end, { desc = "Increase window width" })
+
+-- Height
+vim.keymap.set("n", "<A-k>", function()
+    resize.decrease("height")
+end, { desc = "Decrease window height" })
+
+vim.keymap.set("n", "<A-j>", function()
+    resize.increase("height")
+end, { desc = "Increase window height" })
 ```
 
-## Built-in function
+### Custom step
 
-### Action:
+You can override the default step for individual operations:
 
-- 1: decrease
-- 2: increase
+```lua
+local resize = require("smart-resizing")
 
-You can access this enum by `require("smart-resizing").Action`
+-- Resize by 3 cells.
+resize.increase("width", 3)
+resize.decrease("height", 3)
+```
 
-### Dimension:
+### Vim counts
 
-- 1: height
-- 2: width
+The plugin also supports Vim's built-in count:
 
-You can access this enum by `require("smart-resizing").Dimension`
+```lua
+-- Press 5 followed by your resize mapping to repeat
+-- the resizing operation five times.
+vim.keymap.set("n", "<A-l>", function()
+    require("smart-resizing").increase("width")
+end)
+```
 
-### Functions:
+You can also pass the repetition count explicitly:
 
-- `adjust_current_win_width(step, action)`: adjust the width of the current window (speed up behavior when you hold the keybinding)
+```lua
+-- Increase width by 1 cell, repeated 5 times.
+require("smart-resizing").increase("width", 1, 5)
+```
 
-  - `adjust_current_win_width(1, 1)`: decrease the width of the current window by 1
-  - `adjust_current_win_width(1, 2)`: increase the width of the current window by 1
+## API
 
-- `adjust_current_win_height(step, action)`: adjust the height of the current window (speed up behavior when you hold the keybinding)
+### `setup(opts?)`
 
-  - `adjust_current_win_height(1, 1)`: decrease the height of the current window by 1
-  - `adjust_current_win_height(1, 2)`: increase the height of the current window by 1
+Configure the plugin.
 
-- `increase_current_win_size(step, dimension)`: increase the size of the current window
+```lua
+require("smart-resizing").setup({
+    step = 1,
+    accelerate = true,
+})
+```
 
-  - `increase_current_win_size(1, 1)`: increase the height of the current window by 1
-  - `increase_current_win_size(1, 2)`: increase the width of the current window by 1
+### `increase(dim, step?, count?)`
 
-- `decrease_current_win_size(step, dimension)`: decrease the size of the current window
+Increase the size of the current window.
 
-  - `decrease_current_win_size(1, 1)`: decrease the height of the current window by 1
-  - `decrease_current_win_size(1, 2)`: decrease the width of the current window by 1
+| Parameter | Type | Description |
+|---|---|---|
+| `dim` | `"width"` or `"height"` | Dimension to resize. |
+| `step` | integer? | Number of cells per repetition. Defaults to `config.step`. |
+| `count` | integer? | Number of repetitions. Defaults to `vim.v.count1`. |
 
-- `increase_current_win_width(step)`: increase the width of the current window by 1
+Examples:
 
-- `decrease_current_win_width(step)`: decrease the width of the current window by 1
+```lua
+-- Increase width by 1.
+resize.increase("width")
 
-- `increase_current_win_height(step)`: increase the height of the current window by 1
+-- Increase height by 2.
+resize.increase("height", 2)
 
-- `decrease_current_win_height(step)`: decrease the height of the current window by 1
+-- Increase width by 1, repeated 5 times.
+resize.increase("width", 1, 5)
+```
+
+### `decrease(dim, step?, count?)`
+
+Decrease the size of the current window.
+
+It accepts the same parameters as `increase()`.
+
+```lua
+-- Decrease width by 1.
+resize.decrease("width")
+
+-- Decrease height by 2.
+resize.decrease("height", 2)
+
+-- Decrease width by 1, repeated 5 times.
+resize.decrease("width", 1, 5)
+```
+
+## Limitations
+
+- Resizing behavior can feel less predictable in layouts with many windows along the same direction.
+- When neighboring windows cannot provide enough space, the operation may fall back to resizing the current window directly.
+- Acceleration depends on repeated key events. Its behavior therefore depends partly on the terminal's key-repeat settings.
+- Floating windows use a simpler resizing strategy and do not participate in tiled-window space distribution.
+
+The resizing algorithm is intentionally kept lightweight. Feedback and suggestions for improving its behavior are welcome.
+
+## Preview
+
+### Preview 1
+
+https://github.com/user-attachments/assets/0c87fc05-2415-4470-823e-f88b15e68465
+
+### Preview 2
+
+https://github.com/user-attachments/assets/3a958a6b-59c6-433b-9585-0afe02ed49b6
+
+### Preview 3
+
+https://github.com/user-attachments/assets/a0d5861c-930f-4ee9-b558-feaa786bed81
 
 ## License
 

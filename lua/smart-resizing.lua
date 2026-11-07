@@ -3,29 +3,26 @@ local fn, api, o = vim.fn, vim.api, vim.o
 
 local M = {}
 
----@alias Dimension integer
----| 1 # HEIGHT
----| 2 # WIDTH
+---@class Config
+---@field step integer Cells per repetition when `step` is not passed (default: 1)
+---@field accelerate boolean Speed up while a key is held down (default: false)
+local config = {
+	step = 1,
+	accelerate = false,
+}
 
----@type table<string, Dimension>
-local Dimension = { HEIGHT = 1, WIDTH = 2 }
-M.Dimension = Dimension
-
----@alias ActionEnum integer
----| 1 # INCREASE
----| 2 # DECREASE
-
----@type table<string, ActionEnum>
-local Action = { INCREASE = 1, DECREASE = 2 }
-M.Action = Action
-
--- A key is considered "held" while repeats arrive faster than this (ms)
+-- A key counts as "held" while repeats arrive faster than this (ms)
 local HOLD_TIMEOUT_MS = 180
+-- Holding longer than this starts the speedup (ms)
+local HOLD_THRESHOLD_MS = 600
+-- Base added to the speedup step
+local HOLD_FACTOR = 2
 
----Per-dimension API and direction lookup, so the logic below is written once.
 ---`before` is the left/up side, `after` is the right/down side.
+---`pos` is the index into nvim_win_get_position() ({row, col}).
 local DIMS = {
-	[Dimension.WIDTH] = {
+	width = {
+		pos = 2,
 		set = api.nvim_win_set_width,
 		get = api.nvim_win_get_width,
 		winmin = function()
@@ -34,7 +31,8 @@ local DIMS = {
 		before = "h",
 		after = "l",
 	},
-	[Dimension.HEIGHT] = {
+	height = {
+		pos = 1,
 		set = api.nvim_win_set_height,
 		get = api.nvim_win_get_height,
 		winmin = function()
@@ -45,58 +43,18 @@ local DIMS = {
 	},
 }
 
----Create a callback that speeds up while a key is held down
----@param cb fun(step: integer, action: ActionEnum)
----@param speedup_threshold? integer ms of holding before speedup starts (default 600)
----@param adjustment_factor? integer base added to the speedup step (default 2)
----@return fun(step: integer, action: ActionEnum)
-local function create_hold_pressed_callback(cb, speedup_threshold, adjustment_factor)
-	local timer = assert(uv.new_timer(), "failed to create timer")
-	local last_call_time = -1
-	local is_speedup = false
-
-	speedup_threshold = speedup_threshold or 600
-	adjustment_factor = adjustment_factor or 2
-
-	local reset = vim.schedule_wrap(function()
-		is_speedup = false
-		last_call_time = -1
-	end)
-
-	return function(step, action)
-		step = step or 1
-		timer:stop()
-		timer:start(HOLD_TIMEOUT_MS, 0, reset)
-
-		local now = uv.now()
-		if is_speedup then
-			cb(math.ceil((now - last_call_time) / 1000 + adjustment_factor), action)
-			return
-		end
-
-		if last_call_time < 0 then
-			last_call_time = now
-		end
-		cb(step, action)
-
-		if now - last_call_time > speedup_threshold then
-			is_speedup = true
-		end
-	end
-end
-
 local function is_float()
 	return api.nvim_win_get_config(0).relative ~= ""
 end
 
----Window id in a direction (e.g. "h", "2l") or the current window
+---Window id in a direction (e.g. "h", "2l")
 local function winid(direction)
-	return direction and fn.win_getid(fn.winnr(direction)) or api.nvim_get_current_win()
+	return fn.win_getid(fn.winnr(direction))
 end
 
 ---Middle of the usable editor area along a dimension
-local function middle_vim_position(dimension)
-	if dimension == Dimension.WIDTH then
+local function editor_middle(d)
+	if d.pos == 2 then
 		return o.columns / 2
 	end
 
@@ -106,6 +64,10 @@ local function middle_vim_position(dimension)
 	end
 	local statusline = o.laststatus ~= 0 and 1 or 0
 	return (o.lines - o.cmdheight - statusline - tabline) / 2
+end
+
+local function window_middle(d, size)
+	return api.nvim_win_get_position(0)[d.pos] + size / 2
 end
 
 ---Signed step if the window sits on an edge, nil if it has neighbours on both sides.
@@ -119,14 +81,9 @@ local function edge_direction(step, d)
 	end
 end
 
-local function window_middle(dimension, size)
-	return api.nvim_win_get_position(0)[dimension] + size / 2
-end
-
 ---One increase of `step` cells. The center check is re-evaluated on every call,
 ---so repeating it keeps the result balanced around the middle.
-local function increase_once(step, dimension)
-	local d = DIMS[dimension]
+local function increase_once(d, step)
 	local size = d.get(0)
 
 	if is_float() then
@@ -140,13 +97,12 @@ local function increase_once(step, dimension)
 		return
 	end
 
-	if window_middle(dimension, size) < middle_vim_position(dimension) then
+	if window_middle(d, size) < editor_middle(d) then
 		d.set(0, size + step)
 		return
 	end
 
-	-- Right/bottom half: take space from windows before us.
-	-- Collect the chain of neighbours: 1h, 2h, 3h, ...
+	-- Right/bottom half: take space from windows before us (1h, 2h, 3h, ...)
 	local current = api.nvim_get_current_win()
 	local chain, last = {}, nil
 	for idx = 1, 64 do
@@ -185,9 +141,8 @@ local function increase_once(step, dimension)
 	end
 end
 
----One decrease of `step` cells (same logic as before).
-local function decrease_once(step, dimension)
-	local d = DIMS[dimension]
+---One decrease of `step` cells.
+local function decrease_once(d, step)
 	local size = d.get(0)
 
 	if is_float() then
@@ -202,7 +157,7 @@ local function decrease_once(step, dimension)
 	end
 
 	local winmin = d.winmin()
-	if size > winmin and window_middle(dimension, size) >= middle_vim_position(dimension) then
+	if size > winmin and window_middle(d, size) >= editor_middle(d) then
 		d.set(0, math.max(1, size - step))
 		return
 	end
@@ -225,68 +180,63 @@ local function decrease_once(step, dimension)
 	end
 end
 
----Run `once` `count` times. The count is read synchronously (before
----vim.schedule) because vim.v.count1 is only valid while the mapping runs.
----@param once fun(step: integer, dimension: Dimension)
-local function run(once, step, dimension, count)
-	step = math.max(1, step or 1)
+local hold_start, last_press
+
+---Replace `step` with a growing step while the key is held down
+local function accelerated(step)
+	local now = uv.hrtime() / 1e6
+	if not last_press or now - last_press > HOLD_TIMEOUT_MS then
+		hold_start = now -- a new hold begins
+	end
+	last_press = now
+
+	local held = now - hold_start
+	if held > HOLD_THRESHOLD_MS then
+		return math.ceil(held / 1000 + HOLD_FACTOR)
+	end
+	return step
+end
+
+---The count is read synchronously (before vim.schedule) because
+---vim.v.count1 is only valid while the mapping is running.
+local function run(once, dim, step, count)
+	local d = assert(DIMS[dim], "dim must be 'width' or 'height'")
+	step = math.max(1, step or config.step)
+	if config.accelerate then
+		step = accelerated(step)
+	end
 	local n = math.max(1, count or vim.v.count1)
 
 	vim.schedule(function()
 		for _ = 1, n do
-			once(step, dimension)
+			once(d, step)
 		end
 	end)
 end
 
----Adjust the window dimension smartly
----@param step integer cells per repetition
----@param dimension Dimension
+---Grow the current window, balanced around the editor center.
+---@param dim "width"|"height"
+---@param step? integer cells per repetition (default: config.step)
 ---@param count? integer repetitions (default: vim.v.count1, e.g. `5<key>`)
-M.increase_current_win_size = function(step, dimension, count)
-	run(increase_once, step, dimension, count)
+function M.increase(dim, step, count)
+	run(increase_once, dim, step, count)
 end
 
----Decrease the window dimension smartly
----@param step integer cells per repetition
----@param dimension Dimension
+---Shrink the current window, balanced around the editor center.
+---@param dim "width"|"height"
+---@param step? integer cells per repetition (default: config.step)
 ---@param count? integer repetitions (default: vim.v.count1)
-M.decrease_current_win_size = function(step, dimension, count)
-	run(decrease_once, step, dimension, count)
+function M.decrease(dim, step, count)
+	run(decrease_once, dim, step, count)
 end
 
-M.increase_current_win_width = function(step, count)
-	M.increase_current_win_size(step, Dimension.WIDTH, count)
-end
-M.decrease_current_win_width = function(step, count)
-	M.decrease_current_win_size(step, Dimension.WIDTH, count)
-end
-M.increase_current_win_height = function(step, count)
-	M.increase_current_win_size(step, Dimension.HEIGHT, count)
-end
-M.decrease_current_win_height = function(step, count)
-	M.decrease_current_win_size(step, Dimension.HEIGHT, count)
-end
-
----@param dimension Dimension
----@param grow_action ActionEnum which action maps to `increase_current_win_size`
-local function make_adjuster(dimension, grow_action)
-	return create_hold_pressed_callback(function(step, action)
-		if action == grow_action then
-			M.increase_current_win_size(step, dimension)
-		else
-			M.decrease_current_win_size(step, dimension)
-		end
-	end)
-end
-
-M.adjust_current_win_width = make_adjuster(Dimension.WIDTH, Action.INCREASE)
--- Height is intentionally inverted, as in the original: DECREASE maps to increase_current_win_size
-M.adjust_current_win_height = make_adjuster(Dimension.HEIGHT, Action.DECREASE)
-
----@param opts? table
-M.setup = function(opts)
-	-- Keep empty setup just to satisfy the format of normal plugins
+---@param opts? Config
+function M.setup(opts)
+    if type(opts) ~= "table" or not next(opts) then
+        return
+    end
+    config.step = opts.step or config.step
+    config.accelerate = opts.accelerate or config.accelerate
 end
 
 return M
