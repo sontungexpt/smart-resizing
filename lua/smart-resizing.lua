@@ -1,235 +1,229 @@
-local vim = vim
 local uv = vim.uv or vim.loop
-local fn = vim.fn
-local api = vim.api
-local o = vim.o
-local fn_winnr = fn.winnr
+local fn, api, o = vim.fn, vim.api, vim.o
 
 local M = {}
 
----@alias DimensionEnum number
+---@alias Dimension integer
 ---| 1 # HEIGHT
 ---| 2 # WIDTH
----
 
----@type table<string, DimensionEnum>
-local Dimension = {
-	HEIGHT = 1,
-	WIDTH = 2,
-}
+---@type table<string, Dimension>
+local Dimension = { HEIGHT = 1, WIDTH = 2 }
 M.Dimension = Dimension
 
----@alias ActionEnum number
+---@alias ActionEnum integer
 ---| 1 # INCREASE
 ---| 2 # DECREASE
 
 ---@type table<string, ActionEnum>
-local Action = {
-	INCREASE = 1,
-	DECREASE = 2,
-}
-
+local Action = { INCREASE = 1, DECREASE = 2 }
 M.Action = Action
 
---- Create a speedup callback
---- @param cb fun(step: number, action: ActionEnum) The callback function
---- @param speedup_threshold? uinteger The threshold of the speedup
---- @param adjustment_factor? uinteger The adjustment factor of the speedup
---- @return fun(step: number, action: ActionEnum) The adjust size callback
-local create_hold_pressed_callback = function(cb, speedup_threshold, adjustment_factor)
-	---@diagnostic disable: undefined-field
-	local timer = uv.new_timer()
+-- A key is considered "held" while repeats arrive faster than this (ms)
+local HOLD_TIMEOUT_MS = 180
+
+---Per-dimension API and direction lookup, so the logic below is written once.
+---`before` is the left/up side, `after` is the right/down side.
+local DIMS = {
+	[Dimension.WIDTH] = {
+		set = api.nvim_win_set_width,
+		get = api.nvim_win_get_width,
+		winmin = function()
+			return o.winminwidth
+		end,
+		before = "h",
+		after = "l",
+	},
+	[Dimension.HEIGHT] = {
+		set = api.nvim_win_set_height,
+		get = api.nvim_win_get_height,
+		winmin = function()
+			return o.winminheight
+		end,
+		before = "k",
+		after = "j",
+	},
+}
+
+---Create a callback that speeds up while a key is held down
+---@param cb fun(step: integer, action: ActionEnum)
+---@param speedup_threshold? integer ms of holding before speedup starts (default 600)
+---@param adjustment_factor? integer base added to the speedup step (default 2)
+---@return fun(step: integer, action: ActionEnum)
+local function create_hold_pressed_callback(cb, speedup_threshold, adjustment_factor)
+	local timer = assert(uv.new_timer(), "failed to create timer")
 	local last_call_time = -1
 	local is_speedup = false
 
 	speedup_threshold = speedup_threshold or 600
 	adjustment_factor = adjustment_factor or 2
 
-	--- @param step number The step of increasing
-	--- @param action ActionEnum The action of the window resizing
+	local reset = vim.schedule_wrap(function()
+		is_speedup = false
+		last_call_time = -1
+	end)
+
 	return function(step, action)
+		step = step or 1
 		timer:stop()
-		timer:start(
-			180, -- Stop holding and speedup after 250
-			0,
-			vim.schedule_wrap(function()
-				timer:stop()
-				is_speedup = false
-				last_call_time = -1
-			end)
-		)
+		timer:start(HOLD_TIMEOUT_MS, 0, reset)
 
+		local now = uv.now()
 		if is_speedup then
-			cb(math.ceil((uv.now() - last_call_time) / 1000 + adjustment_factor), action)
-		else
-			if last_call_time < 0 then
-				last_call_time = uv.now()
-			end
-			cb(step, action)
-
-			if uv.now() - last_call_time > speedup_threshold then
-				is_speedup = true
-			end
-		end
-	end
-end
-
-local is_float = function()
-	return api.nvim_win_get_config(0).relative ~= ""
-end
-
---- Get the window id of the direction or the current window
-local winid = function(direction)
-	return direction and fn.win_getid(fn_winnr(direction)) or api.nvim_get_current_win()
-end
-
----Get the middle position of the vim
----@param dimension DimensionEnum The dimension of the window
----@return number The middle position of the vim
-local middle_vim_position = function(dimension)
-	if dimension == Dimension.WIDTH then
-		return o.columns / 2
-	else
-		return (
-			o.lines
-			- o.cmdheight
-			- (o.laststatus ~= 0 and 1 or 0)
-			- (o.showtabline ~= 0 and #api.nvim_list_tabpages() > 1 and 1 or 0)
-		) / 2
-	end
-end
-
----Get the window properties
----@param dimension DimensionEnum The dimension of the window
----@param step uinteger The step of increasing
-local get_window_properties = function(step, dimension)
-	local width_dimension = dimension == Dimension.WIDTH
-	local winnr = fn_winnr()
-	local set_size_fn, get_size_fn, winmin, primary_direction = nil, nil, nil, nil
-
-	if width_dimension then
-		primary_direction = winnr == fn_winnr("l") and -step or winnr == fn_winnr("h") and step or nil
-		set_size_fn = api.nvim_win_set_width
-		get_size_fn = api.nvim_win_get_width
-		winmin = o.winminwidth
-	else
-		primary_direction = winnr == fn_winnr("j") and -step or winnr == fn_winnr("k") and step or nil
-		set_size_fn = api.nvim_win_set_height
-		get_size_fn = api.nvim_win_get_height
-		winmin = o.winminheight
-	end
-
-	local win_size = get_size_fn(0)
-
-	return {
-		width_dimension = width_dimension,
-		primary_direction = primary_direction, -- The primary direction of the window resizing in increasing if decreasing then change this prop to negative
-		set_size_fn = set_size_fn,
-		get_size_fn = get_size_fn,
-		winmin = winmin,
-		win_size = win_size,
-		middle_position = api.nvim_win_get_position(0)[dimension] + win_size / 2,
-	}
-end
-
----Adjust the window dimension smartly
----@param step uinteger The step of increasing
----@param dimension DimensionEnum The dimension of the window
-M.increase_current_win_size = function(step, dimension)
-	vim.schedule(function()
-		local props = get_window_properties(step, dimension)
-		local set_size_fn = props.set_size_fn
-		local win_size = props.win_size
-
-		if is_float() then
-			set_size_fn(0, win_size + step)
+			cb(math.ceil((now - last_call_time) / 1000 + adjustment_factor), action)
 			return
 		end
 
-		local get_size_fn = props.get_size_fn
+		if last_call_time < 0 then
+			last_call_time = now
+		end
+		cb(step, action)
 
-		if props.primary_direction then
-			set_size_fn(0, win_size + props.primary_direction)
-		elseif props.middle_position < middle_vim_position(dimension) then
-			set_size_fn(0, win_size + step)
-		else
-			local hork = props.width_dimension and "h" or "k"
-			local idx = 1
-			local last_id = -1
-			local target_id = winid(hork)
-			local winmin = props.winmin
+		if now - last_call_time > speedup_threshold then
+			is_speedup = true
+		end
+	end
+end
 
-			local dimensions = {
-				{ id = target_id, size = get_size_fn(target_id) },
-			}
+local function is_float()
+	return api.nvim_win_get_config(0).relative ~= ""
+end
 
-			while dimensions[idx].size - step <= winmin do
-				if last_id == target_id then
-					set_size_fn(0, win_size + step)
-					break
-				else
-					last_id = target_id
-					idx = idx + 1
-					target_id = winid(hork)
-					dimensions[idx] = { id = target_id, size = get_size_fn(target_id) }
-				end
+---Window id in a direction (e.g. "h", "2l") or the current window
+local function winid(direction)
+	return direction and fn.win_getid(fn.winnr(direction)) or api.nvim_get_current_win()
+end
+
+---Middle of the usable editor area along a dimension
+local function middle_vim_position(dimension)
+	if dimension == Dimension.WIDTH then
+		return o.columns / 2
+	end
+
+	local tabline = 0
+	if o.showtabline == 2 or (o.showtabline == 1 and #api.nvim_list_tabpages() > 1) then
+		tabline = 1
+	end
+	local statusline = o.laststatus ~= 0 and 1 or 0
+	return (o.lines - o.cmdheight - statusline - tabline) / 2
+end
+
+---Signed step if the window sits on an edge, nil if it has neighbours on both sides.
+---Positive moves the separator toward `after`, negative toward `before`.
+local function edge_direction(step, d)
+	local winnr = fn.winnr()
+	if winnr == fn.winnr(d.after) then
+		return -step
+	elseif winnr == fn.winnr(d.before) then
+		return step
+	end
+end
+
+local function window_middle(dimension, size)
+	return api.nvim_win_get_position(0)[dimension] + size / 2
+end
+
+---Adjust the window dimension smartly
+---@param step integer
+---@param dimension Dimension
+M.increase_current_win_size = function(step, dimension)
+	vim.schedule(function()
+		local d = DIMS[dimension]
+		local size = d.get(0)
+
+		if is_float() then
+			d.set(0, math.max(1, size + step))
+			return
+		end
+
+		local edge = edge_direction(step, d)
+		if edge then
+			d.set(0, math.max(1, size + edge))
+			return
+		end
+
+		if window_middle(dimension, size) < middle_vim_position(dimension) then
+			d.set(0, size + step)
+			return
+		end
+
+		-- Right/bottom half: take space from windows before us.
+		-- Collect the chain of neighbours: 1h, 2h, 3h, ...
+		local current = api.nvim_get_current_win()
+		local chain, last = {}, nil
+		for idx = 1, 64 do
+			local id = winid(idx .. d.before)
+			if id == last or id == current then
+				break
 			end
+			chain[#chain + 1] = { id = id, size = d.get(id) }
+			last = id
+		end
 
-			for i = idx, 1, -1 do
-				local adjust_size = step * idx
-				local new_size = dimensions[i].size - adjust_size
-				if new_size < winmin then
-					adjust_size = dimensions[i].size - winmin
-					new_size = winmin
-				end
-				set_size_fn(dimensions[i].id, new_size)
-				if i > 1 then
-					dimensions[i - 1].size = dimensions[i - 1].size + adjust_size
-				end
+		-- Nearest window that can actually give up space
+		local winmin = d.winmin()
+		local donor
+		for i, w in ipairs(chain) do
+			if w.size > winmin then
+				donor = i
+				break
 			end
+		end
+
+		if not donor then
+			d.set(0, size + step)
+			return
+		end
+
+		local amount = math.min(step, chain[donor].size - winmin)
+		d.set(chain[donor].id, chain[donor].size - amount)
+		-- Pass the freed space along: restore each window between donor and us
+		for i = donor - 1, 1, -1 do
+			d.set(chain[i].id, chain[i].size)
 		end
 	end)
 end
 
---- Decrease the window dimension smartly
---- @param step uinteger The step of decreasing
---- @param dimension DimensionEnum The dimension of the window
+---Decrease the window dimension smartly
+---@param step integer
+---@param dimension Dimension
 M.decrease_current_win_size = function(step, dimension)
 	vim.schedule(function()
-		local props = get_window_properties(step, dimension)
-		local win_size = props.win_size
-		local set_size_fn = props.set_size_fn
+		local d = DIMS[dimension]
+		local size = d.get(0)
 
 		if is_float() then
-			set_size_fn(0, win_size - step)
+			d.set(0, math.max(1, size - step))
 			return
 		end
 
-		local get_size_fn = props.get_size_fn
-		local winmin = props.winmin
+		local edge = edge_direction(step, d)
+		if edge then
+			d.set(0, math.max(1, size - edge))
+			return
+		end
 
-		if props.primary_direction then
-			set_size_fn(0, win_size - props.primary_direction)
-		elseif win_size > winmin and props.middle_position >= middle_vim_position(dimension) then
-			set_size_fn(0, win_size - step)
-		else
-			local lorj = props.width_dimension and "l" or "j"
+		local winmin = d.winmin()
+		if size > winmin and window_middle(dimension, size) >= middle_vim_position(dimension) then
+			d.set(0, math.max(1, size - step))
+			return
+		end
 
-			local idx = 1
-			local last_id = -1
-			local target_id = winid(lorj)
-
-			while last_id ~= target_id do
-				if get_size_fn(target_id) > winmin then
-					local win_push_id = winid(props.width_dimension and "h" or "k")
-					set_size_fn(win_push_id, get_size_fn(win_push_id) + step)
-					return
+		-- Shrink by growing the neighbour before us, if something after us has room
+		local current = api.nvim_get_current_win()
+		local last, target = nil, winid(d.after)
+		local idx = 1
+		while target ~= last and target ~= current do
+			if d.get(target) > winmin then
+				local push = winid(d.before)
+				if push ~= current then
+					d.set(push, d.get(push) + step)
 				end
-
-				last_id = target_id
-				idx = idx + 1
-				target_id = winid(idx .. lorj)
+				return
 			end
+			last = target
+			idx = idx + 1
+			target = winid(idx .. d.after)
 		end
 	end)
 end
@@ -237,33 +231,30 @@ end
 M.increase_current_win_width = function(step)
 	M.increase_current_win_size(step, Dimension.WIDTH)
 end
-
 M.decrease_current_win_width = function(step)
 	M.decrease_current_win_size(step, Dimension.WIDTH)
 end
-
 M.increase_current_win_height = function(step)
 	M.increase_current_win_size(step, Dimension.HEIGHT)
 end
-
 M.decrease_current_win_height = function(step)
 	M.decrease_current_win_size(step, Dimension.HEIGHT)
 end
 
-M.adjust_current_win_width = create_hold_pressed_callback(function(step, action)
-	if action == Action.INCREASE then
-		M.increase_current_win_size(step, Dimension.WIDTH)
-	else
-		M.decrease_current_win_size(step, Dimension.WIDTH)
-	end
-end)
+---@param dimension Dimension
+---@param grow_action ActionEnum which action maps to `increase_current_win_size`
+local function make_adjuster(dimension, grow_action)
+	return create_hold_pressed_callback(function(step, action)
+		if action == grow_action then
+			M.increase_current_win_size(step, dimension)
+		else
+			M.decrease_current_win_size(step, dimension)
+		end
+	end)
+end
 
-M.adjust_current_win_height = create_hold_pressed_callback(function(step, action)
-	if action == Action.DECREASE then
-		M.increase_current_win_size(step, Dimension.HEIGHT)
-	else
-		M.decrease_current_win_size(step, Dimension.HEIGHT)
-	end
-end)
+M.adjust_current_win_width = make_adjuster(Dimension.WIDTH, Action.INCREASE)
+-- Height is intentionally inverted, as in the original: DECREASE maps to increase_current_win_size
+M.adjust_current_win_height = make_adjuster(Dimension.HEIGHT, Action.DECREASE)
 
 return M
