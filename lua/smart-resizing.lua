@@ -8,13 +8,13 @@ local M = {}
 ---@field accelerate boolean Speed up while a key is held down (default: false)
 local config = {
 	step = 1,
-	accelerate = false,
+	accelerate = true,
 }
 
 -- A key counts as "held" while repeats arrive faster than this (ms)
 local HOLD_TIMEOUT_MS = 180
 -- Holding longer than this starts the speedup (ms)
-local HOLD_THRESHOLD_MS = 600
+local HOLD_THRESHOLD_MS = 500
 -- Base added to the speedup step
 local HOLD_FACTOR = 2
 
@@ -43,11 +43,12 @@ local DIMS = {
 	},
 }
 
-local function is_float()
-	return api.nvim_win_get_config(0).relative ~= ""
+---@param win integer
+local function is_float(win)
+	return api.nvim_win_get_config(win).relative ~= ""
 end
 
----Window id in a direction (e.g. "h", "2l")
+---Window id in a direction (e.g. "h", "2l"), relative to the current window
 local function winid(direction)
 	return fn.win_getid(fn.winnr(direction))
 end
@@ -66,8 +67,13 @@ local function editor_middle(d)
 	return (o.lines - o.cmdheight - statusline - tabline) / 2
 end
 
-local function window_middle(d, size)
-	return api.nvim_win_get_position(0)[d.pos] + size / 2
+---Middle of the window along a dimension
+---@param win integer
+---@param d table
+---@param size integer
+---@return number
+local function window_middle(win, d, size)
+	return api.nvim_win_get_position(win)[d.pos] + size / 2
 end
 
 ---Signed step if the window sits on an edge, nil if it has neighbours on both sides.
@@ -84,26 +90,26 @@ end
 ---One increase of `step` cells. The center check is re-evaluated on every call,
 ---so repeating it keeps the result balanced around the middle.
 local function increase_once(d, step)
-	local size = d.get(0)
+	local current = api.nvim_get_current_win()
+	local size = d.get(current)
 
-	if is_float() then
-		d.set(0, math.max(1, size + step))
+	if is_float(current) then
+		d.set(current, math.max(1, size + step))
 		return
 	end
 
 	local edge = edge_direction(step, d)
 	if edge then
-		d.set(0, math.max(1, size + edge))
+		d.set(current, math.max(1, size + edge))
 		return
 	end
 
-	if window_middle(d, size) < editor_middle(d) then
-		d.set(0, size + step)
+	if window_middle(current, d, size) < editor_middle(d) then
+		d.set(current, size + step)
 		return
 	end
 
 	-- Right/bottom half: take space from windows before us (1h, 2h, 3h, ...)
-	local current = api.nvim_get_current_win()
 	local chain, last = {}, nil
 	for idx = 1, 64 do
 		local id = winid(idx .. d.before)
@@ -127,7 +133,7 @@ local function increase_once(d, step)
 	end
 
 	if last_donor == 0 then
-		d.set(0, size + step)
+		d.set(current, size + step)
 		return
 	end
 
@@ -137,33 +143,33 @@ local function increase_once(d, step)
 	end
 
 	if remaining > 0 then
-		d.set(0, d.get(0) + remaining)
+		d.set(current, d.get(current) + remaining)
 	end
 end
 
 ---One decrease of `step` cells.
 local function decrease_once(d, step)
-	local size = d.get(0)
+	local current = api.nvim_get_current_win()
+	local size = d.get(current)
 
-	if is_float() then
-		d.set(0, math.max(1, size - step))
+	if is_float(current) then
+		d.set(current, math.max(1, size - step))
 		return
 	end
 
 	local edge = edge_direction(step, d)
 	if edge then
-		d.set(0, math.max(1, size - edge))
+		d.set(current, math.max(1, size - edge))
 		return
 	end
 
 	local winmin = d.winmin()
-	if size > winmin and window_middle(d, size) >= editor_middle(d) then
-		d.set(0, math.max(1, size - step))
+	if size > winmin and window_middle(current, d, size) >= editor_middle(d) then
+		d.set(current, math.max(1, size - step))
 		return
 	end
 
 	-- Shrink by growing the neighbour before us, if something after us has room
-	local current = api.nvim_get_current_win()
 	local last, target = nil, winid(d.after)
 	local idx = 1
 	while target ~= last and target ~= current do
@@ -232,11 +238,9 @@ end
 
 ---@param opts? Config
 function M.setup(opts)
-    if type(opts) ~= "table" or not next(opts) then
-        return
-    end
-    config.step = opts.step or config.step
-    config.accelerate = opts.accelerate or config.accelerate
+    if opts and next(opts) then
+        config = vim.tbl_extend("force", config, opts)
+	end
 end
 
 return M
