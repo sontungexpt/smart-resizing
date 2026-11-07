@@ -22,7 +22,6 @@ M.Action = Action
 -- A key is considered "held" while repeats arrive faster than this (ms)
 local HOLD_TIMEOUT_MS = 180
 
-
 ---Per-dimension API and direction lookup, so the logic below is written once.
 ---`before` is the left/up side, `after` is the right/down side.
 local DIMS = {
@@ -124,122 +123,149 @@ local function window_middle(dimension, size)
 	return api.nvim_win_get_position(0)[dimension] + size / 2
 end
 
----Adjust the window dimension smartly
----@param step integer
----@param dimension Dimension
-M.increase_current_win_size = function(step, dimension)
+---One increase of `step` cells. The center check is re-evaluated on every call,
+---so repeating it keeps the result balanced around the middle.
+local function increase_once(step, dimension)
+	local d = DIMS[dimension]
+	local size = d.get(0)
+
+	if is_float() then
+		d.set(0, math.max(1, size + step))
+		return
+	end
+
+	local edge = edge_direction(step, d)
+	if edge then
+		d.set(0, math.max(1, size + edge))
+		return
+	end
+
+	if window_middle(dimension, size) < middle_vim_position(dimension) then
+		d.set(0, size + step)
+		return
+	end
+
+	-- Right/bottom half: take space from windows before us.
+	-- Collect the chain of neighbours: 1h, 2h, 3h, ...
+	local current = api.nvim_get_current_win()
+	local chain, last = {}, nil
+	for idx = 1, 64 do
+		local id = winid(idx .. d.before)
+		if id == last or id == current then
+			break
+		end
+		chain[#chain + 1] = { id = id, size = d.get(id) }
+		last = id
+	end
+
+	-- Take `step` cells from the nearest windows first, never below winmin
+	local winmin = d.winmin()
+	local targets, remaining, last_donor = {}, step, 0
+	for i, w in ipairs(chain) do
+		local take = math.min(remaining, math.max(0, w.size - winmin))
+		targets[i] = w.size - take
+		if take > 0 then
+			last_donor = i
+		end
+		remaining = remaining - take
+	end
+
+	if last_donor == 0 then
+		d.set(0, size + step)
+		return
+	end
+
+	-- Apply from the farthest donor towards us so freed space reaches us
+	for i = last_donor, 1, -1 do
+		d.set(chain[i].id, targets[i])
+	end
+
+	if remaining > 0 then
+		d.set(0, d.get(0) + remaining)
+	end
+end
+
+---One decrease of `step` cells (same logic as before).
+local function decrease_once(step, dimension)
+	local d = DIMS[dimension]
+	local size = d.get(0)
+
+	if is_float() then
+		d.set(0, math.max(1, size - step))
+		return
+	end
+
+	local edge = edge_direction(step, d)
+	if edge then
+		d.set(0, math.max(1, size - edge))
+		return
+	end
+
+	local winmin = d.winmin()
+	if size > winmin and window_middle(dimension, size) >= middle_vim_position(dimension) then
+		d.set(0, math.max(1, size - step))
+		return
+	end
+
+	-- Shrink by growing the neighbour before us, if something after us has room
+	local current = api.nvim_get_current_win()
+	local last, target = nil, winid(d.after)
+	local idx = 1
+	while target ~= last and target ~= current do
+		if d.get(target) > winmin then
+			local push = winid(d.before)
+			if push ~= current then
+				d.set(push, d.get(push) + step)
+			end
+			return
+		end
+		last = target
+		idx = idx + 1
+		target = winid(idx .. d.after)
+	end
+end
+
+---Run `once` `count` times. The count is read synchronously (before
+---vim.schedule) because vim.v.count1 is only valid while the mapping runs.
+---@param once fun(step: integer, dimension: Dimension)
+local function run(once, step, dimension, count)
+	step = math.max(1, step or 1)
+	local n = math.max(1, count or vim.v.count1)
+
 	vim.schedule(function()
-		local d = DIMS[dimension]
-		local size = d.get(0)
-
-		if is_float() then
-			d.set(0, math.max(1, size + step))
-			return
-		end
-
-		local edge = edge_direction(step, d)
-		if edge then
-			d.set(0, math.max(1, size + edge))
-			return
-		end
-
-		if window_middle(dimension, size) < middle_vim_position(dimension) then
-			d.set(0, size + step)
-			return
-		end
-
-		-- Right/bottom half: take space from windows before us.
-		-- Collect the chain of neighbours: 1h, 2h, 3h, ...
-		local current = api.nvim_get_current_win()
-		local chain, last = {}, nil
-		for idx = 1, 64 do
-			local id = winid(idx .. d.before)
-			if id == last or id == current then
-				break
-			end
-			chain[#chain + 1] = { id = id, size = d.get(id) }
-			last = id
-		end
-
-		-- Nearest window that can actually give up space
-		local winmin = d.winmin()
-		local donor
-		for i, w in ipairs(chain) do
-			if w.size > winmin then
-				donor = i
-				break
-			end
-		end
-
-		if not donor then
-			d.set(0, size + step)
-			return
-		end
-
-		local amount = math.min(step, chain[donor].size - winmin)
-		d.set(chain[donor].id, chain[donor].size - amount)
-		-- Pass the freed space along: restore each window between donor and us
-		for i = donor - 1, 1, -1 do
-			d.set(chain[i].id, chain[i].size)
+		for _ = 1, n do
+			once(step, dimension)
 		end
 	end)
+end
+
+---Adjust the window dimension smartly
+---@param step integer cells per repetition
+---@param dimension Dimension
+---@param count? integer repetitions (default: vim.v.count1, e.g. `5<key>`)
+M.increase_current_win_size = function(step, dimension, count)
+	run(increase_once, step, dimension, count)
 end
 
 ---Decrease the window dimension smartly
----@param step integer
+---@param step integer cells per repetition
 ---@param dimension Dimension
-M.decrease_current_win_size = function(step, dimension)
-	vim.schedule(function()
-		local d = DIMS[dimension]
-		local size = d.get(0)
-
-		if is_float() then
-			d.set(0, math.max(1, size - step))
-			return
-		end
-
-		local edge = edge_direction(step, d)
-		if edge then
-			d.set(0, math.max(1, size - edge))
-			return
-		end
-
-		local winmin = d.winmin()
-		if size > winmin and window_middle(dimension, size) >= middle_vim_position(dimension) then
-			d.set(0, math.max(1, size - step))
-			return
-		end
-
-		-- Shrink by growing the neighbour before us, if something after us has room
-		local current = api.nvim_get_current_win()
-		local last, target = nil, winid(d.after)
-		local idx = 1
-		while target ~= last and target ~= current do
-			if d.get(target) > winmin then
-				local push = winid(d.before)
-				if push ~= current then
-					d.set(push, d.get(push) + step)
-				end
-				return
-			end
-			last = target
-			idx = idx + 1
-			target = winid(idx .. d.after)
-		end
-	end)
+---@param count? integer repetitions (default: vim.v.count1)
+M.decrease_current_win_size = function(step, dimension, count)
+	run(decrease_once, step, dimension, count)
 end
 
-M.increase_current_win_width = function(step)
-	M.increase_current_win_size(step, Dimension.WIDTH)
+M.increase_current_win_width = function(step, count)
+	M.increase_current_win_size(step, Dimension.WIDTH, count)
 end
-M.decrease_current_win_width = function(step)
-	M.decrease_current_win_size(step, Dimension.WIDTH)
+M.decrease_current_win_width = function(step, count)
+	M.decrease_current_win_size(step, Dimension.WIDTH, count)
 end
-M.increase_current_win_height = function(step)
-	M.increase_current_win_size(step, Dimension.HEIGHT)
+M.increase_current_win_height = function(step, count)
+	M.increase_current_win_size(step, Dimension.HEIGHT, count)
 end
-M.decrease_current_win_height = function(step)
-	M.decrease_current_win_size(step, Dimension.HEIGHT)
+M.decrease_current_win_height = function(step, count)
+	M.decrease_current_win_size(step, Dimension.HEIGHT, count)
 end
 
 ---@param dimension Dimension
@@ -259,9 +285,8 @@ M.adjust_current_win_width = make_adjuster(Dimension.WIDTH, Action.INCREASE)
 M.adjust_current_win_height = make_adjuster(Dimension.HEIGHT, Action.DECREASE)
 
 ---@param opts? table
-M.setup = function (opts)
-    -- Keep empty setup just to satisfy the format of normal plugins
-
+M.setup = function(opts)
+	-- Keep empty setup just to satisfy the format of normal plugins
 end
 
 return M
