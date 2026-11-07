@@ -22,6 +22,7 @@ M.Action = Action
 -- A key is considered "held" while repeats arrive faster than this (ms)
 local HOLD_TIMEOUT_MS = 180
 
+
 ---Per-dimension API and direction lookup, so the logic below is written once.
 ---`before` is the left/up side, `after` is the right/down side.
 local DIMS = {
@@ -256,5 +257,11 @@ end
 M.adjust_current_win_width = make_adjuster(Dimension.WIDTH, Action.INCREASE)
 -- Height is intentionally inverted, as in the original: DECREASE maps to increase_current_win_size
 M.adjust_current_win_height = make_adjuster(Dimension.HEIGHT, Action.DECREASE)
+
+---@param opts? table
+M.setup = function (opts)
+    -- Keep empty setup just to satisfy the format of normal plugins
+
+end
 
 return M
