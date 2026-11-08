@@ -1,29 +1,33 @@
 # smart-resizing.nvim
 
-A lightweight Neovim plugin that provides smarter window resizing with center-aware space distribution and optional hold-to-accelerate behavior.
+A lightweight Neovim plugin that provides intelligent window resizing with center-aware space distribution, edge-aware behavior, and configurable hold-to-accelerate support.
 
-Instead of relying entirely on Neovim's default window resizing, `smart-resizing.nvim` considers the current window's position and its neighboring windows to make resizing feel more balanced and predictable.
+Unlike Neovim's default window resizing, `smart-resizing.nvim` considers the current window's position relative to the editor center and distributes space between neighboring windows to provide a more balanced and predictable resizing experience.
 
 ## Features
 
 ### Smart Window Resizing
 
-- **Center-aware resizing:** Uses the center of the editor as a reference when deciding how to resize the current window.
-- **Edge-aware behavior:** Adjusts resizing direction when the current window is at an edge.
-- **Neighbor space distribution:** When necessary, borrows space from neighboring windows instead of blindly resizing the current window.
-- **Minimum size awareness:** Respects `winminwidth` and `winminheight` when distributing space between windows.
-- **Floating window support:** Supports resizing floating windows without applying the normal tiled-window balancing logic.
-- **Count support:** Supports Vim counts, such as `5` followed by your resize mapping.
+- **Center-aware resizing:** Uses the editor center as a reference when deciding how to distribute space.
+- **Edge-aware behavior:** Automatically adjusts resizing direction when the current window is at an edge.
+- **Neighbor space distribution:** Borrows space from neighboring windows when necessary instead of blindly resizing the current window.
+- **Minimum size awareness:** Respects `winminwidth` and `winminheight` when distributing space.
+- **Floating window support:** Supports resizing floating windows without applying tiled-window balancing logic.
+- **Width and height support:** Provides independent resizing operations for both dimensions.
+- **Vim count support:** Supports built-in counts, such as `5` followed by your resize mapping.
 
 ### Hold-to-Accelerate
 
-Optionally increases the resizing step when a key is held down.
+Provides optional progressive acceleration when holding a resize key.
 
-- Repeated key presses within a configurable detection interval are treated as one continuous hold.
-- Acceleration starts after the hold threshold.
-- The resizing step increases progressively while the key continues to be repeated.
+- **Continuous hold detection:** Consecutive key repeats are treated as one continuous hold within a configurable timeout.
+- **Configurable threshold:** Determines how long a key must be held before acceleration begins.
+- **Smooth acceleration:** Uses a quadratic ease-in curve to progressively increase the resizing step.
+- **Configurable maximum speed:** Controls the maximum resizing speed relative to the base step.
+- **Fractional step accumulation:** Carries fractional movement between repetitions to make acceleration smoother.
+- **Predictable counts:** Explicit Vim counts bypass acceleration and always perform the requested number of repetitions.
 
-This is disabled by default.
+Acceleration is enabled by default.
 
 ## Installation
 
@@ -35,7 +39,12 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
     lazy = true,
     opts = {
         step = 1,
-        accelerate = true,
+        accelerate = {
+            enabled = true,
+            threshold_ms = 120,
+            ramp_ms = 1500,
+            max_multiplier = 6,
+        },
     },
 }
 ```
@@ -51,27 +60,94 @@ require("smart-resizing").setup({
     -- Default number of cells per resize operation.
     step = 1,
 
-    -- Enable hold-to-accelerate behavior.
+    -- Hold-to-accelerate configuration.
+    accelerate = {
+        enabled = true,
+        threshold_ms = 120,
+        ramp_ms = 1500,
+        max_multiplier = 6,
+    },
+})
+```
+
+### Configuration options
+
+| Option | Type | Default | Description |
+|---|---|---:|---|
+| `step` | integer | `1` | Default number of cells per resize repetition. |
+| `accelerate` | boolean or table | `true` | Enables or configures hold-to-accelerate behavior. |
+| `accelerate.enabled` | boolean | `true` | Enables or disables acceleration. |
+| `accelerate.threshold_ms` | integer | `120` | Holding duration required before acceleration starts. |
+| `accelerate.ramp_ms` | integer | `1500` | Duration required to reach maximum acceleration after the threshold. |
+| `accelerate.max_multiplier` | number | `6` | Maximum resizing speed relative to the base step. |
+
+### Acceleration tuning
+
+The acceleration behavior can be customized depending on your preferred resizing feel.
+
+| Parameter | Increase | Decrease |
+|---|---|---|
+| `threshold_ms` | Acceleration starts later. | Acceleration starts sooner. |
+| `ramp_ms` | Slower, smoother acceleration. | Faster acceleration. |
+| `max_multiplier` | Higher maximum speed. | Lower maximum speed. |
+
+#### Faster, more aggressive
+
+```lua
+require("smart-resizing").setup({
+    accelerate = {
+        threshold_ms = 50,
+        ramp_ms = 700,
+        max_multiplier = 10,
+    },
+})
+```
+
+#### Slower, more precise
+
+```lua
+require("smart-resizing").setup({
+    accelerate = {
+        threshold_ms = 400,
+        ramp_ms = 2000,
+        max_multiplier = 3,
+    },
+})
+```
+
+#### Disable acceleration
+
+Using the boolean shorthand:
+
+```lua
+require("smart-resizing").setup({
     accelerate = false,
 })
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `step` | integer | `1` | Default number of cells per resize operation. |
-| `accelerate` | boolean | `false` | Enable progressive acceleration when holding a resize key. |
+Or using the configuration table:
 
-### Acceleration behavior
+```lua
+require("smart-resizing").setup({
+    accelerate = {
+        enabled = false,
+    },
+})
+```
 
-The current implementation uses these internal constants:
+Setting `max_multiplier = 1` also effectively disables progressive acceleration.
 
-| Constant | Value | Description |
+### Internal hold detection
+
+The plugin uses an internal constant to determine whether consecutive key repeats belong to the same hold operation.
+
+| Constant | Default | Description |
 |---|---:|---|
-| `HOLD_TIMEOUT_MS` | `180` ms | Maximum interval between repeated presses to consider a key held. |
-| `HOLD_THRESHOLD_MS` | `600` ms | Time before acceleration starts. |
-| `HOLD_FACTOR` | `2` | Base added to the accelerated step. |
+| `HOLD_TIMEOUT_MS` | `100` ms | Maximum interval between consecutive key repeats before a new hold is detected. |
 
-These are currently internal implementation details rather than public configuration options.
+This is currently an internal implementation detail rather than a public configuration option.
+
+If acceleration frequently resets while holding a key, your terminal or operating system may have a relatively slow key-repeat rate. In that case, consider increasing `HOLD_TIMEOUT_MS`.
 
 ## Usage
 
@@ -115,15 +191,19 @@ resize.decrease("height", 3)
 
 ### Vim counts
 
-The plugin also supports Vim's built-in count:
+The plugin supports Vim's built-in count:
 
 ```lua
--- Press 5 followed by your resize mapping to repeat
--- the resizing operation five times.
+-- Press 5 followed by your resize mapping
+-- to perform 5 resizing repetitions.
 vim.keymap.set("n", "<A-l>", function()
     require("smart-resizing").increase("width")
 end)
 ```
+
+When a count is provided, acceleration is skipped to ensure predictable results.
+
+For example, `5<A-l>` performs exactly five resizing repetitions using the configured base step.
 
 You can also pass the repetition count explicitly:
 
@@ -141,7 +221,26 @@ Configure the plugin.
 ```lua
 require("smart-resizing").setup({
     step = 1,
+    accelerate = {
+        enabled = true,
+        threshold_ms = 120,
+        ramp_ms = 1500,
+        max_multiplier = 6,
+    },
+})
+```
+
+Supports both boolean and table-based acceleration configuration:
+
+```lua
+-- Enable acceleration.
+require("smart-resizing").setup({
     accelerate = true,
+})
+
+-- Disable acceleration.
+require("smart-resizing").setup({
+    accelerate = false,
 })
 ```
 
@@ -185,12 +284,40 @@ resize.decrease("height", 2)
 resize.decrease("width", 1, 5)
 ```
 
+## How Acceleration Works
+
+The plugin calculates resizing speed based on how long the key has been continuously held.
+
+After the configured threshold, acceleration follows a quadratic ease-in curve:
+
+\[
+speed(t) = 1 + (M - 1)t^2
+\]
+
+Where:
+
+- `M` is the configured `max_multiplier`.
+- `t` is the normalized acceleration progress, clamped between `0` and `1`.
+
+The normalized progress is calculated as:
+
+\[
+t = \frac{elapsed - threshold}{ramp}
+\]
+
+The resulting speed gradually increases from the base step to the maximum multiplier.
+
+Fractional movement is accumulated between repetitions, allowing the resizing step to increase progressively without unnecessarily discarding fractional values.
+
+When the key is released or the interval between repeats exceeds `HOLD_TIMEOUT_MS`, the next operation starts a new acceleration cycle.
+
 ## Limitations
 
-- Resizing behavior can feel less predictable in layouts with many windows along the same direction.
-- When neighboring windows cannot provide enough space, the operation may fall back to resizing the current window directly.
-- Acceleration depends on repeated key events. Its behavior therefore depends partly on the terminal's key-repeat settings.
+- Resizing behavior can be less predictable in complex layouts with many neighboring windows.
+- When neighboring windows cannot provide enough space, the algorithm may fall back to resizing the current window directly.
+- Acceleration depends on repeated key events, so its behavior is influenced by terminal and operating system key-repeat settings.
 - Floating windows use a simpler resizing strategy and do not participate in tiled-window space distribution.
+- Vim counts intentionally bypass acceleration.
 
 The resizing algorithm is intentionally kept lightweight. Feedback and suggestions for improving its behavior are welcome.
 
