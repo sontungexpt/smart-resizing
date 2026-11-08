@@ -254,6 +254,11 @@ local function run(sign, dim, step, count)
 	local n = math.min(count or vim.v.count1, math.ceil(limit / step))
 
 	vim.schedule(function()
+		-- The command-line window does not allow resizing other windows
+		if fn.getcmdwintype() ~= "" then
+			return
+		end
+
 		local current = api.nvim_get_current_win()
 		local size = d.get(current)
 
