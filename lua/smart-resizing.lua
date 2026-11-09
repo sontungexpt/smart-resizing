@@ -83,7 +83,7 @@ local config = {
 	step = 1,
 	accelerate = {
 		enabled = true,
-		threshold_ms = 120,
+		threshold_ms = 110,
 		ramp_ms = 1500,
 		max_multiplier = 6,
 	},
@@ -92,7 +92,7 @@ local config = {
 -- A key counts as "held" while repeats arrive faster than this (ms).
 -- Raise it (e.g. 150) if acceleration keeps resetting because your OS
 -- key-repeat is slow; lower it if separate quick taps count as a hold.
-local HOLD_TIMEOUT_MS = 100
+local HOLD_TIMEOUT_MS = 80
 
 ---`before` is the left/up side, `after` is the right/down side.
 ---`pos` is the index into nvim_win_get_position() ({row, col}).
