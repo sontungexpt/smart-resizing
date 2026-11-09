@@ -14,6 +14,28 @@ local M = {}
 ---@field accelerate AccelerateConfig
 
 --[[
+HOW IT BALANCES (no cached state)
+
+  Every repetition reads the live layout and splits its `step` cells evenly
+  between the `before` side (left/up) and the `after` side (right/down).
+  When `step` is odd, the spare cell goes to whichever side the current
+  window size's parity selects, so consecutive repeats alternate sides.
+  Nothing is remembered between calls, so other plugins, mouse drags,
+  :wincmd or any other event can change the layout at any time without
+  confusing the next resize.
+
+  Space is always taken from the nearest neighbour first, and a farther
+  neighbour is only touched once the nearer one is at its minimum size.
+  If one side has no room left, the other side covers the rest.
+
+  STATE POLICY
+  Layout state (window sizes, positions, neighbours, minimum sizes) is read
+  live inside every resize and never stored. The only thing remembered
+  between calls is the key-hold timer used for acceleration. It holds no
+  layout information, it is discarded as soon as it is older than
+  HOLD_TIMEOUT_MS, and it is also discarded when the key, direction or
+  window changes, so it cannot go stale.
+
 HOW TO TUNE THE FEEL (all values can be overridden in setup({ ... }))
 
   step
@@ -94,31 +116,11 @@ local DIMS = {
 	},
 }
 
-local get_position = api.nvim_win_get_position
 local win_getid, winnr = fn.win_getid, fn.winnr
 
 ---Window id in a direction (e.g. "h", "2l"), relative to the current window
 local function winid(direction)
 	return win_getid(winnr(direction))
-end
-
----Middle of the usable editor area along a dimension
-local function editor_middle(d)
-	if d.pos == 2 then
-		return o.columns / 2
-	end
-
-	local tabline = 0
-	if o.showtabline == 2 or (o.showtabline == 1 and #api.nvim_list_tabpages() > 1) then
-		tabline = 1
-	end
-	local statusline = o.laststatus ~= 0 and 1 or 0
-	return (o.lines - o.cmdheight - statusline - tabline) / 2
-end
-
----Middle of the window along a dimension
-local function window_middle(win, d, size)
-	return get_position(win)[d.pos] + size / 2
 end
 
 ---+1 if the window is on the `before` edge, -1 if on the `after` edge,
@@ -132,21 +134,69 @@ local function edge_direction(d)
 	end
 end
 
--- Scratch tables reused between calls to avoid allocating on every repeat
-local donor_ids, donor_targets = {}, {}
+---Split `step` cells between the `before` and `after` side.
+---Even steps split evenly. For an odd step the spare cell goes to a side
+---chosen by the parity of the live window size, so it alternates between
+---repeats without remembering anything.
+---@return integer before_amount
+---@return integer after_amount
+local function split_step(step, size)
+	local base = math.floor(step / 2)
+	local spare = step - 2 * base -- 0 or 1
+	if size % 2 == 0 then
+		return base + spare, base
+	end
+	return base, base + spare
+end
 
----One increase of `step` cells (window has neighbours on both sides).
----The center check is re-evaluated on every call, so repeating it keeps
----the result balanced around the middle.
-local function increase_once(d, step, current, size, mid, winmin)
-	if window_middle(current, d, size) < mid then
-		d.set(current, size + step)
-		return
+---Take up to `want` cells from the windows AFTER us (3, then 4, ...).
+---Growing the current window makes Neovim take space from the nearest window
+---after us first, and only move on to the next one when the nearer one is at
+---its minimum. So we only need to check that there is enough room and grow
+---the current window; the farther windows stay untouched until needed.
+---Returns how many cells were taken.
+local function take_after(d, want, current, winmin)
+	if want <= 0 then
+		return 0
 	end
 
-	-- Right/bottom half: take space from windows before us (1h, 2h, 3h, ...).
-	-- The walk stops as soon as `step` cells are found.
-	local remaining, last_donor, last = step, 0, nil
+	local room, last = 0, nil
+	for idx = 1, 64 do
+		local id = winid(idx .. d.after)
+		if id == last or id == current then
+			break
+		end
+		local sz = d.get(id)
+		if sz > winmin then
+			room = room + (sz - winmin)
+		end
+		last = id
+		if room >= want then
+			break
+		end
+	end
+
+	local amount = math.min(want, room)
+	if amount > 0 then
+		d.set(current, d.get(current) + amount)
+	end
+	return amount
+end
+
+---Take up to `want` cells from the windows BEFORE us (1 is nearest, then 2, ...).
+---Shrinking a window hands its space to the window after it, so the freed
+---cells flow towards us. Apply from the farthest donor to the nearest, and do
+---NOT resize the current window afterwards (that would also eat from the
+---windows after us).
+---Returns how many cells were taken.
+local function take_before(d, want, current, winmin)
+	if want <= 0 then
+		return 0
+	end
+
+	-- Fresh tables on every call: nothing survives between resizes
+	local donor_ids, donor_targets = {}, {}
+	local remaining, last_donor, last = want, 0, nil
 	for idx = 1, 64 do
 		if remaining <= 0 then
 			break
@@ -167,63 +217,87 @@ local function increase_once(d, step, current, size, mid, winmin)
 	end
 
 	if last_donor == 0 then
-		d.set(current, size + step)
-		return
+		return 0
 	end
 
-	-- Apply from the farthest donor towards us so freed space reaches us
 	for i = last_donor, 1, -1 do
 		d.set(donor_ids[i], donor_targets[i])
 	end
+	return want - remaining
+end
 
-	if remaining > 0 then
-		d.set(current, d.get(current) + remaining)
+---One increase of `step` cells (window has neighbours on both sides).
+---Half comes from each side; if a side cannot give its share, the other
+---side covers the shortfall.
+local function increase_once(d, step, current, size, winmin)
+	local want_before, want_after = split_step(step, size)
+
+	local taken = take_before(d, want_before, current, winmin)
+	taken = taken + take_after(d, want_after, current, winmin)
+
+	local short = step - taken
+	if short > 0 then
+		short = short - take_after(d, short, current, winmin)
+	end
+	if short > 0 then
+		short = short - take_before(d, short, current, winmin)
+	end
+	if short == step then
+		d.set(current, size + step)
 	end
 end
 
 ---One decrease of `step` cells (window has neighbours on both sides).
-local function decrease_once(d, step, current, size, mid, winmin)
-	if size > winmin and window_middle(current, d, size) >= mid then
-		d.set(current, math.max(1, size - step))
+---Half is given back through each edge.
+local function decrease_once(d, step, current, size, winmin)
+	local floor_size = math.max(1, winmin)
+	local amount = math.min(step, size - floor_size)
+	if amount <= 0 then
 		return
 	end
 
-	-- Shrink by growing the neighbour before us, if something after us has room
-	local last, target = nil, winid(d.after)
-	local idx = 1
-	while target ~= last and target ~= current do
-		if d.get(target) > winmin then
-			local push = winid(d.before)
-			if push ~= current then
-				d.set(push, d.get(push) + step)
-			end
-			return
+	local from_before, from_after = split_step(amount, size)
+
+	-- Before edge: grow the neighbour before us, it takes the cells from us.
+	if from_before > 0 then
+		local push = winid(d.before)
+		if push ~= current then
+			d.set(push, d.get(push) + from_before)
 		end
-		last = target
-		idx = idx + 1
-		target = winid(idx .. d.after)
+	end
+
+	-- After edge: shrink ourselves, the cells go to the nearest window after us.
+	if from_after > 0 then
+		local now = d.get(current)
+		local target = math.max(floor_size, now - from_after)
+		if target < now then
+			d.set(current, target)
+		end
 	end
 end
 
-local hold_start, last_press
-local carry = 0 -- fractional cells not yet applied
+-- The only state kept between calls: when the current hold started, when
+-- the last repeat arrived, and the fractional cells not yet applied.
+-- It never stores anything about the layout. It is replaced whenever it is
+-- older than HOLD_TIMEOUT_MS or belongs to a different key/window.
+local hold = nil
 
 ---Grow `step` smoothly the longer the key is held down.
 ---Speed follows an ease-in curve (t^2) from 1x to `max_multiplier`x, and the
 ---fractional part is carried over so the speed ramps without integer jumps.
 ---@param step integer
+---@param key string identifies the held key (direction, dimension, window)
 ---@return integer
-local function accelerated(step)
+local function accelerated(step, key)
 	local acc = config.accelerate
 	local now = uv.hrtime() / 1e6
 
-	if not last_press or now - last_press > HOLD_TIMEOUT_MS then
-		hold_start = now -- a new hold begins
-		carry = 0
+	if not hold or hold.key ~= key or now - hold.last > HOLD_TIMEOUT_MS then
+		hold = { key = key, start = now, last = now, carry = 0 } -- a new hold begins
 	end
-	last_press = now
+	hold.last = now
 
-	local t = (now - hold_start - acc.threshold_ms) / acc.ramp_ms
+	local t = (now - hold.start - acc.threshold_ms) / acc.ramp_ms
 	if t <= 0 then
 		return step
 	end
@@ -231,9 +305,9 @@ local function accelerated(step)
 		t = 1
 	end
 
-	carry = carry + step * (1 + (acc.max_multiplier - 1) * t * t)
-	local out = math.floor(carry)
-	carry = carry - out
+	hold.carry = hold.carry + step * (1 + (acc.max_multiplier - 1) * t * t)
+	local out = math.floor(hold.carry)
+	hold.carry = hold.carry - out
 	return out > step and out or step
 end
 
@@ -246,7 +320,7 @@ local function run(sign, dim, step, count)
 
 	-- An explicit count means "exactly this much": no acceleration
 	if config.accelerate.enabled and count == nil and vim.v.count == 0 then
-		step = accelerated(step)
+		step = accelerated(step, sign .. dim .. api.nvim_get_current_win())
 	end
 
 	-- More repetitions than the screen has cells can never matter
@@ -275,13 +349,13 @@ local function run(sign, dim, step, count)
 			return
 		end
 
-		-- Neighbours on both sides: the center check depends on the new size,
-		-- so repeat. Values that don't change between repeats are read once.
-		local mid, winmin = editor_middle(d), o[d.winmin]
+		-- Neighbours on both sides: every repeat reads the live layout and
+		-- splits its cells between both sides. Nothing is cached.
+		local winmin = o[d.winmin]
 		local once = sign > 0 and increase_once or decrease_once
 
 		for _ = 1, n do
-			once(d, step, current, size, mid, winmin)
+			once(d, step, current, size, winmin)
 			local new_size = d.get(current)
 			-- Nothing left to give or take: further repeats are wasted work
 			if new_size == size then
@@ -292,7 +366,7 @@ local function run(sign, dim, step, count)
 	end)
 end
 
----Grow the current window, balanced around the editor center.
+---Grow the current window evenly towards both sides.
 ---@param dim "width"|"height"
 ---@param step? integer cells per repetition (default: config.step)
 ---@param count? integer repetitions (default: vim.v.count1, e.g. `5<key>`)
@@ -300,7 +374,7 @@ function M.increase(dim, step, count)
 	run(1, dim, step, count)
 end
 
----Shrink the current window, balanced around the editor center.
+---Shrink the current window evenly from both sides.
 ---@param dim "width"|"height"
 ---@param step? integer cells per repetition (default: config.step)
 ---@param count? integer repetitions (default: vim.v.count1)
