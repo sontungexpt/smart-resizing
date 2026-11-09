@@ -8,7 +8,7 @@ Unlike Neovim's default window resizing, `smart-resizing.nvim` considers the cur
 
 ### Smart Window Resizing
 
-- **Center-aware resizing:** Uses the editor center as a reference when deciding how to distribute space.
+- **Center-aware resizing:** Uses the active window center as a reference when deciding how to distribute space.
 - **Edge-aware behavior:** Automatically adjusts resizing direction when the current window is at an edge.
 - **Neighbor space distribution:** Borrows space from neighboring windows when necessary instead of blindly resizing the current window.
 - **Minimum size awareness:** Respects `winminwidth` and `winminheight` when distributing space.
